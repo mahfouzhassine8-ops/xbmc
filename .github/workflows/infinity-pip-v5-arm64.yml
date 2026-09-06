@@ -1,0 +1,123 @@
+name: Infinity PiP v5 Native Core ARM64
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - infinity-pip-v5-omega-21.2
+    paths:
+      - 'infinity-pip-v5.patch'
+      - '.github/workflows/infinity-pip-v5-arm64.yml'
+
+jobs:
+  build-arm64:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout Omega 21.2 branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android NDK and build tools
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platform-tools' 'platforms;android-34' 'build-tools;33.0.1' 'ndk;21.4.7075529'
+
+      - name: Install Kodi Android build prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            autoconf bison build-essential curl flex gawk git gperf \
+            lib32stdc++6 lib32z1 lib32z1-dev libcurl4-openssl-dev \
+            unzip zip zlib1g-dev ccache
+
+      - name: Apply Infinity native PiP resize patch
+        run: |
+          set -euo pipefail
+          git apply --check infinity-pip-v5.patch
+          git apply infinity-pip-v5.patch
+          grep -q 'Infinity PiP surface' xbmc/platform/android/activity/XBMCApp.cpp
+
+      - name: Set Infinity Java package for JNI compatibility
+        run: |
+          set -euo pipefail
+          sed -i 's/^APP_PACKAGE .*/APP_PACKAGE com.projectinfinity.kodi/' version.txt
+          grep '^VERSION_MAJOR 21' version.txt
+          grep '^VERSION_MINOR 2' version.txt
+          grep '^APP_PACKAGE com.projectinfinity.kodi' version.txt
+
+      - name: Cache Kodi depends and tarballs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/.android-tools/xbmc-depends
+            ${{ github.workspace }}/.android-tools/xbmc-tarballs
+          key: kodi-21.2-android-aarch64-r21e-${{ hashFiles('tools/depends/target/**', 'tools/depends/native/**') }}
+          restore-keys: |
+            kodi-21.2-android-aarch64-r21e-
+
+      - name: Configure Kodi depends
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/.android-tools/xbmc-tarballs"
+          cd tools/depends
+          ./bootstrap
+          ./configure \
+            --with-tarballs="$GITHUB_WORKSPACE/.android-tools/xbmc-tarballs" \
+            --host=aarch64-linux-android \
+            --with-sdk-path="$ANDROID_HOME" \
+            --with-ndk-path="$ANDROID_HOME/ndk/21.4.7075529" \
+            --prefix="$GITHUB_WORKSPACE/.android-tools/xbmc-depends" \
+            --disable-ccache
+
+      - name: Build Kodi dependencies
+        run: |
+          set -euo pipefail
+          make -j"$(nproc)" -C tools/depends
+
+      - name: Configure Kodi CMake build
+        run: |
+          set -euo pipefail
+          make -C tools/depends/target/cmakebuildsys BUILD_DIR="$GITHUB_WORKSPACE/build"
+
+      - name: Build Kodi native core
+        run: |
+          set -euo pipefail
+          make -j"$(nproc)" -C build
+
+      - name: Package test APK
+        run: |
+          set -euo pipefail
+          make -C build apk
+          APK=$(find "$GITHUB_WORKSPACE" -type f -name '*.apk' | head -1)
+          test -n "$APK"
+          cp "$APK" "$GITHUB_WORKSPACE/Infinity-PiP-v5-NativeCore-arm64.apk"
+
+          LIB=$(find "$GITHUB_WORKSPACE/build" -type f -name 'libkodi.so' | head -1)
+          if [ -z "$LIB" ]; then
+            LIB=$(find "$GITHUB_WORKSPACE" -type f -name 'libkodi.so' | head -1)
+          fi
+          test -n "$LIB"
+          cp "$LIB" "$GITHUB_WORKSPACE/libkodi-pip-v5-arm64.so"
+
+      - name: Upload native core and APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: Infinity-PiP-v5-NativeCore-arm64
+          path: |
+            Infinity-PiP-v5-NativeCore-arm64.apk
+            libkodi-pip-v5-arm64.so
+          retention-days: 30
