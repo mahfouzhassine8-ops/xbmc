@@ -1,0 +1,55 @@
+diff --git a/xbmc/platform/android/activity/XBMCApp.cpp b/xbmc/platform/android/activity/XBMCApp.cpp
+index 552d3eae5f..1111111111 100644
+--- a/xbmc/platform/android/activity/XBMCApp.cpp
++++ b/xbmc/platform/android/activity/XBMCApp.cpp
+@@ -334,9 +334,38 @@ void CXBMCApp::onCreateWindow(ANativeWindow* window)
+ 
+ void CXBMCApp::onResizeWindow()
+ {
+-  android_printf("%s: ", __PRETTY_FUNCTION__);
++  android_printf("%s: ", __PRETTY_FUNCTION__);
++
++  // Android native PiP changes the SurfaceView/ANativeWindow dimensions without
++  // changing the physical display mode. Kodi 21.2 historically ignored this
++  // callback because Android was assumed to remain fixed fullscreen landscape.
++  // That leaves CGraphicContext using the old fullscreen coordinate space and
++  // squashes video into a thin vertical strip inside the smaller PiP EGL surface.
+   m_window.reset();
+-  // no need to do anything because we are fixed in fullscreen landscape mode
++
++  auto window = GetNativeWindow(1000);
++  if (!window)
++  {
++    CLog::Log(LOGWARNING, "CXBMCApp::onResizeWindow: native window unavailable");
++    return;
++  }
++
++  const int32_t width = window->GetWidth();
++  const int32_t height = window->GetHeight();
++  if (width <= 0 || height <= 0)
++    return;
++
++  CLog::Log(LOGINFO, "CXBMCApp::onResizeWindow: Infinity PiP surface {}x{}", width, height);
++
++  auto* winSystem = CServiceBroker::GetWinSystem();
++  if (!winSystem)
++    return;
++
++  // Reuse Kodi's existing RES_WINDOW path. SetVideoResolution() updates
++  // CGraphicContext's screen dimensions, calls the platform ResizeWindow(),
++  // resets the GLES render system/viewport, and broadcasts GUI_MSG_WINDOW_RESIZE.
++  RESOLUTION_INFO& res = CDisplaySettings::GetInstance().GetResolutionInfo(RES_WINDOW);
++  res.iWidth = width;
++  res.iHeight = height;
++  res.iScreenWidth = width;
++  res.iScreenHeight = height;
++  res.fPixelRatio = 1.0f;
++  res.Overscan.left = 0;
++  res.Overscan.top = 0;
++  res.Overscan.right = width;
++  res.Overscan.bottom = height;
++
++  winSystem->GetGfxContext().SetVideoResolution(RES_WINDOW, true);
+ }
+ 
+ void CXBMCApp::onDestroyWindow()
